@@ -167,6 +167,7 @@ class ResponseCache:
         self.max_entries = max_entries
         self.ttl_sec = ttl_sec
         self._lock = threading.Lock()
+        self._dirty = False
         self._data: Dict[str, Dict[str, Any]] = self._load()
 
     def _load(self) -> Dict[str, Dict[str, Any]]:
@@ -182,6 +183,7 @@ class ResponseCache:
         try:
             with open(self.cache_path, "w", encoding="utf-8") as f:
                 json.dump(self._data, f, indent=2, ensure_ascii=False)
+            self._dirty = False
         except Exception as e:
             logger.warning(f"Önbellek diske yazılamadı: {e}")
 
@@ -198,8 +200,10 @@ class ResponseCache:
                 return None
             if (time.time() - entry.get("timestamp", 0)) > self.ttl_sec:
                 del self._data[key]
+                self._save()
                 return None
             entry["hits"] = entry.get("hits", 0) + 1
+            # Avoid rewriting disk on pure hits read to reduce unnecessary disk I/O
             return {
                 "response": entry["response"],
                 "source": f"cache ({entry.get('original_source', 'memory')})",

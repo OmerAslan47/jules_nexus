@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.log
+jules_nexus/brain_cache.json
+jules_nexus/data/
+jules_nexus/logs/
+jules_nexus/nexus_knowledge.db

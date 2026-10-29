@@ -25,6 +25,45 @@ if not logger.handlers:
     logger.addHandler(fh)
 
 
+# Pre-compiled compiled sensitive regex patterns at module level for maximum performance
+SENSITIVE_PATTERNS_COMPILED: List[Tuple[str, re.Pattern, str]] = [
+    (
+        "api_key",
+        re.compile(
+            r"\b(AIza[0-9A-Za-z\-_]{25,}|sk-[0-9A-Za-z\-_]{20,}|ghp_[0-9A-Za-z]{25,}|AQ\.[0-9A-Za-z\-_]{15,})\b"
+        ),
+        "[GİZLİ_API_ANAHTARI]",
+    ),
+    (
+        "iban",
+        re.compile(r"\bTR\d{2}\s?(?:\d{4}\s?){5}\d{2}\b", re.IGNORECASE),
+        "[GİZLİ_IBAN]",
+    ),
+    (
+        "credit_card",
+        re.compile(r"\b(?:\d{4}[\s\-]?){3}\d{4}\b"),
+        "[GİZLİ_KART_NO]",
+    ),
+    (
+        "password_assign",
+        re.compile(
+            r"(?i)(şifre|sifre|parola|password|secret|token)\s*[:=]\s*([^\s,;\"']+)"
+        ),
+        r"\1: [GİZLİ_ŞİFRE]",
+    ),
+    (
+        "local_user_path",
+        re.compile(r"(?i)[c-z]:\\Users\\[^\\\s\"']+"),
+        r"C:\\Users\\[YEREL_KULLANICI]",
+    ),
+    (
+        "email",
+        re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
+        "[GİZLİ_EPOSTA]",
+    ),
+]
+
+
 class PrivacyAirGapFirewall:
     """
     NEXUS v4.0 - Kapalı Kutu (Zero-Data-Leak / Air-Gap) Veri Mahremiyeti ve Güvenlik Duvarı:
@@ -38,42 +77,7 @@ class PrivacyAirGapFirewall:
        ve finansal/bankacılık işlemlerini çekirdek seviyesinde bloklar.
     """
 
-    SENSITIVE_PATTERNS: List[Tuple[str, re.Pattern, str]] = [
-        (
-            "api_key",
-            re.compile(
-                r"\b(AIza[0-9A-Za-z\-_]{25,}|sk-[0-9A-Za-z\-_]{20,}|ghp_[0-9A-Za-z]{25,}|AQ\.[0-9A-Za-z\-_]{15,})\b"
-            ),
-            "[GİZLİ_API_ANAHTARI]",
-        ),
-        (
-            "iban",
-            re.compile(r"\bTR\d{2}\s?(?:\d{4}\s?){5}\d{2}\b", re.IGNORECASE),
-            "[GİZLİ_IBAN]",
-        ),
-        (
-            "credit_card",
-            re.compile(r"\b(?:\d{4}[\s\-]?){3}\d{4}\b"),
-            "[GİZLİ_KART_NO]",
-        ),
-        (
-            "password_assign",
-            re.compile(
-                r"(?i)(şifre|sifre|parola|password|secret|token)\s*[:=]\s*([^\s,;\"']+)"
-            ),
-            r"\1: [GİZLİ_ŞİFRE]",
-        ),
-        (
-            "local_user_path",
-            re.compile(r"(?i)[c-z]:\\Users\\[^\\\s\"']+"),
-            r"C:\\Users\\[YEREL_KULLANICI]",
-        ),
-        (
-            "email",
-            re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b"),
-            "[GİZLİ_EPOSTA]",
-        ),
-    ]
+    SENSITIVE_PATTERNS = SENSITIVE_PATTERNS_COMPILED
 
     DESTRUCTIVE_COMMANDS = (
         "format c:",
