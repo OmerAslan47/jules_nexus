@@ -1,6 +1,10 @@
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+# Pre-compile regex token extractors at module level to optimize tool selection speed
+WORD_REGEX = re.compile(r"[a-zçğıöşü0-9]{3,}")
+DESC_WORD_REGEX = re.compile(r"[a-zçğıöşü0-9]{4,}")
+
 
 class SmartToolSelector:
     """
@@ -241,7 +245,7 @@ class SmartToolSelector:
         Eğer soru genel sohbet veya kişisel hafıza sorusuysa boş liste [] döndürür ki LLM anında yanıt versin.
         """
         t = user_text.strip().lower()
-        words = set(re.findall(r"[a-zçğıöşü0-9]{3,}", t))
+        words = set(WORD_REGEX.findall(t))
 
         # Saf sohbet / kişisel soru kalıpları -> Araç göndermeye gerek yok (Sıfır gecikme!)
         conversational_Checks = (
@@ -293,7 +297,7 @@ class SmartToolSelector:
             score += len(overlap_name) * 6.0
 
             # 3. Açıklama kelime örtüşmesi (kök/ön-ek benzerliği dahil)
-            desc_words = set(re.findall(r"[a-zçğıöşü0-9]{4,}", t_desc))
+            desc_words = set(DESC_WORD_REGEX.findall(t_desc))
             for uw in words:
                 if uw in desc_words:
                     score += 3.0

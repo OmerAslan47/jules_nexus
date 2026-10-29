@@ -1,4 +1,4 @@
-﻿from core.paths import NEXUS_ROOT
+from core.paths import NEXUS_ROOT
 import collections
 import hashlib
 import json
