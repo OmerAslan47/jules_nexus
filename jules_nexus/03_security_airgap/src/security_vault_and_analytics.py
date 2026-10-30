@@ -168,8 +168,8 @@ class TabularDataAnalyzer:
                 unique_vals.add(val)
                 try:
                     numeric_vals.append(float(val.replace(",", ".")))
-                except ValueError:
-                    pass
+                except ValueError as e:
+                    logger.debug(f"Sayisal degere cevirme hatasi: {e}")
 
             if len(numeric_vals) >= max(len(rows) * 0.5, 1):
                 sorted_n = sorted(numeric_vals)

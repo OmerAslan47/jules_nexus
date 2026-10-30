@@ -3,12 +3,42 @@ import hashlib
 import json
 import logging
 import os
+import sqlite3
 import subprocess
 import threading
 import time
 from collections import deque
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 import requests
+
+
+# ============================================================================
+# RETRY MEKANİZMASI (Exponential Backoff)
+# ============================================================================
+def retry_with_backoff(max_retries: int = 3, initial_delay: float = 1.0, backoff_factor: float = 2.0):
+    def decorator(func):
+        import functools
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            delay = initial_delay
+            last_err = None
+            for attempt in range(max_retries):
+                try:
+                    res, src = func(*args, **kwargs)
+                    if res is not None:
+                        return res, src
+                except Exception as e:
+                    last_err = e
+                    logger.debug(f"{func.__name__} attempt {attempt + 1} failed: {e}")
+
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                    delay *= backoff_factor
+            if last_err:
+                logger.warning(f"{func.__name__} failed after {max_retries} attempts.")
+            return None, None
+        return wrapper
+    return decorator
 
 
 # ============================================================================
@@ -153,37 +183,47 @@ class EndpointCircuitBreaker:
 # ============================================================================
 class ResponseCache:
     """
-    Aynı veya tekrarlanan sorgular için hem bellek içi (LRU) hem de disk tabanlı
-    (JSON) önbellekleme sağlar. Böylece internet/GPU harcamadan 0.01 sn'de yanıt döner.
+    Aynı veya tekrarlanan sorgular için SQLite (WAL modu) tabanlı önbellekleme sağlar.
+    Böylece internet/GPU harcamadan 0.01 sn'de yanıt döner.
     """
 
     def __init__(
         self,
-        cache_path: str = (NEXUS_ROOT + "/brain_cache.json"),
-        max_entries: int = 200,
+        db_path: str = (NEXUS_ROOT + "/brain_cache.db"),
+        max_entries: int = 500,
         ttl_sec: int = 3600 * 12,
     ):
-        self.cache_path = cache_path
+        self.db_path = db_path
         self.max_entries = max_entries
         self.ttl_sec = ttl_sec
         self._lock = threading.Lock()
-        self._data: Dict[str, Dict[str, Any]] = self._load()
+        self._init_db()
 
-    def _load(self) -> Dict[str, Dict[str, Any]]:
-        if os.path.exists(self.cache_path):
+    def _get_conn(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=10.0, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        return conn
+
+    def _init_db(self):
+        with self._lock:
+            conn = self._get_conn()
             try:
-                with open(self.cache_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-        return {}
-
-    def _save(self):
-        try:
-            with open(self.cache_path, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.warning(f"Önbellek diske yazılamadı: {e}")
+                with conn:
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS response_cache (
+                            hash_key TEXT PRIMARY KEY,
+                            prompt_preview TEXT NOT NULL,
+                            response TEXT NOT NULL,
+                            original_source TEXT NOT NULL,
+                            timestamp REAL NOT NULL,
+                            hits INTEGER NOT NULL DEFAULT 1
+                        )
+                        """
+                    )
+            finally:
+                conn.close()
 
     @staticmethod
     def _make_key(prompt: str, system_prompt: str) -> str:
@@ -192,43 +232,76 @@ class ResponseCache:
 
     def get(self, prompt: str, system_prompt: str) -> Optional[Dict[str, str]]:
         key = self._make_key(prompt, system_prompt)
+        now = time.time()
         with self._lock:
-            entry = self._data.get(key)
-            if not entry:
+            conn = self._get_conn()
+            try:
+                with conn:
+                    row = conn.execute(
+                        "SELECT response, original_source, timestamp, hits FROM response_cache WHERE hash_key = ?",
+                        (key,),
+                    ).fetchone()
+
+                    if not row:
+                        return None
+
+                    response, original_source, timestamp, hits = row
+
+                    if (now - timestamp) > self.ttl_sec:
+                        conn.execute("DELETE FROM response_cache WHERE hash_key = ?", (key,))
+                        return None
+
+                    conn.execute("UPDATE response_cache SET hits = ? WHERE hash_key = ?", (hits + 1, key))
+                    return {
+                        "response": response,
+                        "source": f"cache ({original_source})",
+                    }
+            except Exception as e:
+                logger.debug(f"SQLite cache okuma hatası: {e}")
                 return None
-            if (time.time() - entry.get("timestamp", 0)) > self.ttl_sec:
-                del self._data[key]
-                return None
-            entry["hits"] = entry.get("hits", 0) + 1
-            return {
-                "response": entry["response"],
-                "source": f"cache ({entry.get('original_source', 'memory')})",
-            }
+            finally:
+                conn.close()
 
     def put(self, prompt: str, system_prompt: str, response: str, source: str):
         # Araç çağrısı içeren yanıtları önbelleğe alma (her seferinde taze çalışsın)
         if "TOOL_CALL:" in response:
             return
         key = self._make_key(prompt, system_prompt)
+        now = time.time()
         with self._lock:
-            if len(self._data) >= self.max_entries:
-                oldest_key = min(
-                    self._data.keys(), key=lambda k: self._data[k].get("timestamp", 0)
-                )
-                del self._data[oldest_key]
-            self._data[key] = {
-                "prompt_preview": prompt[:80],
-                "response": response,
-                "original_source": source,
-                "timestamp": time.time(),
-                "hits": 1,
-            }
-            self._save()
+            conn = self._get_conn()
+            try:
+                with conn:
+                    # Kapasite kontrolü
+                    count = conn.execute("SELECT COUNT(*) FROM response_cache").fetchone()[0]
+                    if count >= self.max_entries:
+                        conn.execute(
+                            "DELETE FROM response_cache WHERE hash_key IN (SELECT hash_key FROM response_cache ORDER BY timestamp ASC LIMIT 1)"
+                        )
+
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO response_cache
+                        (hash_key, prompt_preview, response, original_source, timestamp, hits)
+                        VALUES (?, ?, ?, ?, ?, COALESCE((SELECT hits FROM response_cache WHERE hash_key = ?) + 1, 1))
+                        """,
+                        (key, prompt[:80], response, source, now, key),
+                    )
+            except Exception as e:
+                logger.debug(f"SQLite cache yazma hatası: {e}")
+            finally:
+                conn.close()
 
     def clear(self):
         with self._lock:
-            self._data.clear()
-            self._save()
+            conn = self._get_conn()
+            try:
+                with conn:
+                    conn.execute("DELETE FROM response_cache")
+            except Exception as e:
+                logger.debug(f"SQLite cache temizleme hatası: {e}")
+            finally:
+                conn.close()
 
 
 # ============================================================================
@@ -261,8 +334,8 @@ class ConversationBuffer:
                     self.rolling_summary = data.get("rolling_summary", "")
                     for msg in data.get("messages", [])[-(self.max_turns * 2) :]:
                         self.messages.append(msg)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Konuşma geçmişi okuma hatası: {e}")
 
     def save(self):
         try:
@@ -424,8 +497,8 @@ class BrainRouter:
             r = requests.get(f"{local_url}/api/tags", timeout=2)
             if r.status_code == 200:
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Yerel Ollama api kontrol hatası: {e}")
 
         if self._local_service_checked:
             return False
@@ -448,6 +521,7 @@ class BrainRouter:
                 logger.warning(f"Yerel Ollama otomatik başlatılamadı: {e}")
         return False
 
+    @retry_with_backoff(max_retries=3, initial_delay=1.0)
     def _try_colab(
         self, messages: List[Dict[str, str]]
     ) -> Tuple[Optional[str], Optional[str]]:
@@ -500,6 +574,7 @@ class BrainRouter:
 
         return None, None
 
+    @retry_with_backoff(max_retries=2, initial_delay=1.5)
     def _try_gemini(
         self, prompt: str, system_prompt: str, history_msgs: List[Dict[str, str]]
     ) -> Tuple[Optional[str], Optional[str]]:
@@ -554,8 +629,8 @@ class BrainRouter:
                     if val:
                         key = str(val).strip()
                         os.environ["GEMINI_API_KEY"] = key
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Winreg Gemini key okuma hatası: {e}")
         return (key or "").strip()
 
     def get_gemini_client(self):
@@ -610,8 +685,8 @@ class BrainRouter:
                 r = requests.get(f"{colab_url}/nexus_info", timeout=6)
                 if r.status_code == 200:
                     roles = dict(r.json().get("roles", {}))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Colab rol okuma hatası: {e}")
             if not roles:
                 names = self.check_colab_models()
                 for role, hints in self.ROLE_FAMILY_HINTS.items():
@@ -792,6 +867,7 @@ class BrainRouter:
 
         yield ("__SOURCE__", "error")
 
+    @retry_with_backoff(max_retries=2, initial_delay=1.0)
     def _try_local_ollama(
         self, messages: List[Dict[str, str]]
     ) -> Tuple[Optional[str], Optional[str]]:
