@@ -119,8 +119,8 @@ class SelfHealingGuardian:
                         os.remove(fpath)
                         purged_tts_files += 1
                         repairs_made.append(f"Okunamayan WAV önbelleği silindi: {fname}")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f"Okunamayan WAV silme hatasi: {e}")
 
         # 4. Yerel Nöral Ses Modeli (Piper Fahrettin ONNX) Bütünlük Kontrolü
         piper_path = (NEXUS_ROOT + "/models/piper/tr_TR-fahrettin-medium.onnx")

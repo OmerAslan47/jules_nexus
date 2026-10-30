@@ -72,8 +72,8 @@ class MultiModelCouncil:
                     from google import genai
 
                     self._gemini_client = genai.Client(api_key=gemini_key)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Gemini client oluşturulurken hata: {e}")
         return self._gemini_client
 
     def _resolve_gemini_key(self) -> str:
@@ -88,8 +88,8 @@ class MultiModelCouncil:
                 if val:
                     os.environ["GEMINI_API_KEY"] = str(val).strip()
                     return str(val).strip()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Winreg Gemini key okuma hatası: {e}")
         return ""
 
     def _call_specific_specialist(
@@ -250,8 +250,8 @@ class MultiModelCouncil:
                                 "source": f"Colab_MultiFamily_Council ({ms}ms)",
                                 "deliberation_ms": ms,
                             }
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Konsey deliberasyon isteği hatası (Colab): {e}")
 
         reasoner_sys = (
             "Sen NEXUS Katmanlı Konseyi'nin 1. Ailesi (DeepSeek Mantık ve Çözüm Uzmanı) olarak görev yapıyorsun.\n"
@@ -346,8 +346,8 @@ class MultiModelCouncil:
                         draft_2 = txt
                     else:
                         draft_3 = txt
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Uzman çağrı hatası (idx {idx}): {e}")
 
         arbiter_sys = (
             "Sen NEXUS Çoklu YZ Ailesi Konseyi'nin Baş Hakemi ve Sentez Motorusun.\n"
@@ -394,6 +394,6 @@ class MultiModelCouncil:
             if r.status_code == 200:
                 self.last_drive_sync_time = time.time()
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Colab drive sync hatası: {e}")
         return False

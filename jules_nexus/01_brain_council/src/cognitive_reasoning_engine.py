@@ -292,8 +292,8 @@ class CognitiveReasoningEngine:
             if self.ui_state_callback:
                 try:
                     self.ui_state_callback("DEEP_THINKING")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"UI durum bildirimi hatası (DEEP_THINKING): {e}")
 
             council_res = self.council.run_council_deliberation(
                 user_query=user_text,

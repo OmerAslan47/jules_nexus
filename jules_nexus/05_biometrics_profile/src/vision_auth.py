@@ -75,8 +75,8 @@ class SceneAndLivenessAnalyzer:
             try:
                 lap = cv2.Laplacian(gray_face, cv2.CV_64F)
                 return round(float(lap.var()), 2)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Laplacian var hesaplama hatasi: {e}")
         gx = np.diff(gray_face.astype(np.float32), axis=1)
         return round(float(np.var(gx)), 2)
 
@@ -160,13 +160,13 @@ class VisionAuth:
             try:
                 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
                 return clahe.apply(gray_img)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"CLAHE uygulama hatasi: {e}")
         if hasattr(cv2, "equalizeHist"):
             try:
                 return cv2.equalizeHist(gray_img)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"equalizeHist uygulama hatasi: {e}")
         return gray_img
 
     @classmethod
@@ -289,15 +289,15 @@ class VisionAuth:
         if os.path.exists(self.owner_face_vec_path):
             try:
                 vectors.append(np.load(self.owner_face_vec_path))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Sahip face vec okuma hatasi: {e}")
 
         for fname in os.listdir(FACE_GALLERY_DIR):
             if fname.endswith(".npy"):
                 try:
                     vectors.append(np.load(os.path.join(FACE_GALLERY_DIR, fname)))
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Galeri face vec okuma hatasi: {e}")
         return vectors
 
     def _record_intruder_snapshot(
